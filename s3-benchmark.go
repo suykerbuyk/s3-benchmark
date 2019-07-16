@@ -398,7 +398,6 @@ func main() {
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
-<<<<<<< HEAD
 		// reset counters
 		uploadCount = 0
 		uploadSlowdownCount = 0
@@ -407,10 +406,6 @@ func main() {
 		deleteCount = 0
 		deleteSlowdownCount = 0
 
-=======
-		uploadCount = 0
-		downloadCount = 0
->>>>>>> 95bd64c... fix upload/download count not correct issue (#1)
 		// Run the upload case
 		runningThreads = int64(threads)
 		starttime := time.Now()
