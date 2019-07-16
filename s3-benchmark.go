@@ -312,7 +312,8 @@ func main() {
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
-
+		uploadCount = 0
+		downloadCount = 0
 		// Run the upload case
 		runningThreads = int32(threads)
 		starttime := time.Now()
