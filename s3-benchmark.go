@@ -1,5 +1,6 @@
 // s3-benchmark.go
 // Copyright (c) 2017 Wasabi Technology, Inc.
+// Forked and maintained by MinIO, Inc.
 
 package main
 
@@ -269,14 +270,14 @@ func runDelete(threadNum int) {
 
 func main() {
 	// Hello
-	fmt.Println("Wasabi benchmark program v2.0")
+	fmt.Println("S3 benchmark program v2.0")
 
 	// Parse command line
 	myflag := flag.NewFlagSet("myflag", flag.ExitOnError)
-	myflag.StringVar(&accessKey, "a", "", "Access key")
-	myflag.StringVar(&secretKey, "s", "", "Secret key")
-	myflag.StringVar(&urlHost, "u", "http://s3.wasabisys.com", "URL for host with method prefix")
-	myflag.StringVar(&bucket, "b", "wasabi-benchmark-bucket", "Bucket for testing")
+	myflag.StringVar(&accessKey, "a", "Q3AM3UQ867SPQQA43P2F", "Access key")
+	myflag.StringVar(&secretKey, "s", "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG", "Secret key")
+	myflag.StringVar(&urlHost, "u", "https://play.min.io", "URL for host with method prefix")
+	myflag.StringVar(&bucket, "b", "s3-benchmark", "Bucket for testing")
 	myflag.IntVar(&durationSecs, "d", 60, "Duration of each test in seconds")
 	myflag.IntVar(&threads, "t", 1, "Number of threads to run")
 	myflag.IntVar(&loops, "l", 1, "Number of times to repeat test")
