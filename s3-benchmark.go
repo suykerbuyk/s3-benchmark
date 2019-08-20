@@ -51,6 +51,7 @@ type logMessage struct {
 	Time       float64   `json:"timeTaken"`
 	Objects    int64     `json:"totalObjects"`
 	Speed      string    `json:"avgSpeed"`
+	RawSpeed   uint64    `json:"rawSpeed"`
 	Operations float64   `json:"totalOperations"`
 }
 
@@ -406,6 +407,7 @@ func main() {
 			Time:       uploadTime,
 			Objects:    uploadCount,
 			Speed:      bytefmt.ByteSize(uint64(bps)),
+			RawSpeed:   uint64(bps), 
 			Operations: (float64(uploadCount) / uploadTime),
 		})
 
@@ -431,6 +433,7 @@ func main() {
 			Time:       downloadTime,
 			Objects:    downloadCount,
 			Speed:      bytefmt.ByteSize(uint64(bps)),
+			RawSpeed:   uint64(bps),
 			Operations: (float64(downloadCount) / downloadTime),
 		})
 
