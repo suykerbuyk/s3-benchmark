@@ -10,7 +10,6 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -33,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	json "github.com/minio/mc/pkg/colorjson"
 )
 
 // Global variables
@@ -42,7 +42,17 @@ var objectSize uint64
 var objectData []byte
 var runningThreads, uploadCount, downloadCount, deleteCount, uploadSlowdownCount, downloadSlowdownCount, deleteSlowdownCount int64
 var endtime, uploadFinish, downloadFinish, deleteFinish time.Time
-var jsonPrint bool
+var jsonPrint, newStruct bool
+
+type parameters struct {
+	URLHost  string       `json:"urlHost"`
+	Bucket   string       `json:"bucket"`
+	Duration int          `json:"duration"`
+	Threads  int          `json:"threads"`
+	Loops    int          `json:"loops"`
+	Size     string       `json:"sizeArg"`
+	Results  []logMessage `json:"results"`
+}
 
 type logMessage struct {
 	LogTime       time.Time `json:"time"`
@@ -337,6 +347,7 @@ func main() {
 	myflag.IntVar(&durationSecs, "d", 60, "Duration of each test in seconds")
 	myflag.IntVar(&threads, "t", 1, "Number of threads to run")
 	myflag.IntVar(&loops, "l", 1, "Number of times to repeat test")
+	myflag.BoolVar(&newStruct, "x", false, "Print output as one json document structure")
 	var sizeArg string
 	myflag.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with postfix K, M, and G")
 	if err := myflag.Parse(os.Args[1:]); err != nil {
@@ -344,7 +355,7 @@ func main() {
 	}
 
 	// Hello
-	if !jsonPrint {
+	if !jsonPrint && !newStruct {
 		fmt.Println("S3 benchmark program v3.0")
 	}
 
@@ -360,19 +371,22 @@ func main() {
 		log.Fatalf("Invalid -z argument for object size: %v", err)
 	}
 
-	type parameters struct {
-		URLHost  string `json:"urlHost"`
-		Bucket   string `json:"bucket"`
-		Duration int    `json:"duration"`
-		Threads  int    `json:"threads"`
-		Loops    int    `json:"loops"`
-		Size     string `json:"sizeArg"`
-	}
+	var params *parameters
 
 	// Echo the parameters
-	if !jsonPrint {
+	if !jsonPrint && !newStruct {
 		fmt.Println(fmt.Sprintf("Parameters: url=%s, bucket=%s, duration=%d, threads=%d, loops=%d, size=%s",
 			urlHost, bucket, durationSecs, threads, loops, sizeArg))
+	} else if newStruct {
+		params = &parameters{
+			URLHost:  urlHost,
+			Bucket:   bucket,
+			Duration: durationSecs,
+			Threads:  threads,
+			Loops:    loops,
+			Size:     sizeArg,
+			Results:  []logMessage{},
+		}
 	} else {
 		data, err := json.Marshal(parameters{
 			URLHost:  urlHost,
@@ -485,8 +499,22 @@ func main() {
 	}
 
 	// All done
-	if !jsonPrint {
+	if params != nil {
+		logNewStruct(params)
+	}
+	if !jsonPrint && !newStruct {
 		fmt.Println("Benchmark completed.")
 	}
 	logfile.Close()
+}
+
+func logNewStruct(p *parameters) {
+	if p == nil {
+		return
+	}
+	b, err := json.MarshalIndent(p, "", " ")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%s\n", b)
 }
