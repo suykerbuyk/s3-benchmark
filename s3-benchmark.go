@@ -10,7 +10,6 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -33,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	json "github.com/minio/mc/pkg/colorjson"
 )
 
 // Global variables
@@ -42,7 +42,17 @@ var objectSize uint64
 var objectData []byte
 var runningThreads, uploadCount, downloadCount, deleteCount int64
 var endtime, uploadFinish, downloadFinish, deleteFinish time.Time
-var jsonPrint bool
+var jsonPrint, newStruct bool
+
+type parameters struct {
+	URLHost  string       `json:"urlHost"`
+	Bucket   string       `json:"bucket"`
+	Duration int          `json:"duration"`
+	Threads  int          `json:"threads"`
+	Loops    int          `json:"loops"`
+	Size     string       `json:"sizeArg"`
+	Results  []logMessage `json:"results"`
+}
 
 type logMessage struct {
 	LogTime    time.Time `json:"time"`
@@ -322,6 +332,7 @@ func main() {
 	myflag.IntVar(&durationSecs, "d", 10, "Duration of each test in seconds")
 	myflag.IntVar(&threads, "t", 1, "Number of threads to run")
 	myflag.IntVar(&loops, "l", 1, "Number of times to repeat test")
+	myflag.BoolVar(&newStruct, "x", false, "Print output as one json document structure")
 	var sizeArg string
 	myflag.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with postfix K, M, and G")
 	if err := myflag.Parse(os.Args[1:]); err != nil {
@@ -329,7 +340,7 @@ func main() {
 	}
 
 	// Hello
-	if !jsonPrint {
+	if !jsonPrint && !newStruct {
 		fmt.Println("S3 benchmark program v3.0")
 	}
 
@@ -345,19 +356,22 @@ func main() {
 		log.Fatalf("Invalid -z argument for object size: %v", err)
 	}
 
-	type parameters struct {
-		URLHost  string `json:"urlHost"`
-		Bucket   string `json:"bucket"`
-		Duration int    `json:"duration"`
-		Threads  int    `json:"threads"`
-		Loops    int    `json:"loops"`
-		Size     string `json:"sizeArg"`
-	}
+	var params *parameters
 
 	// Echo the parameters
-	if !jsonPrint {
+	if !jsonPrint && !newStruct {
 		fmt.Println(fmt.Sprintf("Parameters: url=%s, bucket=%s, duration=%d, threads=%d, loops=%d, size=%s",
 			urlHost, bucket, durationSecs, threads, loops, sizeArg))
+	} else if newStruct {
+		params = &parameters{
+			URLHost:  urlHost,
+			Bucket:   bucket,
+			Duration: durationSecs,
+			Threads:  threads,
+			Loops:    loops,
+			Size:     sizeArg,
+			Results:  []logMessage{},
+		}
 	} else {
 		data, err := json.Marshal(parameters{
 			URLHost:  urlHost,
@@ -400,16 +414,21 @@ func main() {
 		uploadTime := uploadFinish.Sub(starttime).Seconds()
 
 		bps := float64(uint64(uploadCount)*objectSize) / uploadTime
-		logit(logMessage{
+		lmp := logMessage{
 			LogTime:    time.Now(),
 			Loop:       loop,
 			Method:     http.MethodPut,
 			Time:       uploadTime,
 			Objects:    uploadCount,
 			Speed:      bytefmt.ByteSize(uint64(bps)),
-			RawSpeed:   uint64(bps), 
+			RawSpeed:   uint64(bps),
 			Operations: (float64(uploadCount) / uploadTime),
-		})
+		}
+		if params != nil {
+			params.Results = append(params.Results, lmp)
+		} else {
+			logit(lmp)
+		}
 
 		// Run the download case
 		runningThreads = int64(threads)
@@ -426,7 +445,7 @@ func main() {
 		downloadTime := downloadFinish.Sub(starttime).Seconds()
 
 		bps = float64(uint64(downloadCount)*objectSize) / downloadTime
-		logit(logMessage{
+		lmg := logMessage{
 			LogTime:    time.Now(),
 			Loop:       loop,
 			Method:     http.MethodGet,
@@ -435,7 +454,12 @@ func main() {
 			Speed:      bytefmt.ByteSize(uint64(bps)),
 			RawSpeed:   uint64(bps),
 			Operations: (float64(downloadCount) / downloadTime),
-		})
+		}
+		if params != nil {
+			params.Results = append(params.Results, lmg)
+		} else {
+			logit(lmg)
+		}
 
 		// Run the delete case
 		runningThreads = int64(threads)
@@ -451,18 +475,37 @@ func main() {
 		}
 		deleteTime := deleteFinish.Sub(starttime).Seconds()
 
-		logit(logMessage{
+		lmd := logMessage{
 			LogTime:    time.Now(),
 			Loop:       loop,
 			Method:     http.MethodDelete,
 			Time:       deleteTime,
 			Operations: (float64(uploadCount) / deleteTime),
-		})
+		}
+		if params != nil {
+			params.Results = append(params.Results, lmd)
+		} else {
+			logit(lmd)
+		}
 	}
 
 	// All done
-	if !jsonPrint {
+	if params != nil {
+		logNewStruct(params)
+	}
+	if !jsonPrint && !newStruct {
 		fmt.Println("Benchmark completed.")
 	}
 	logfile.Close()
+}
+
+func logNewStruct(p *parameters) {
+	if p == nil {
+		return
+	}
+	b, err := json.MarshalIndent(p, "", " ")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%s\n", b)
 }
