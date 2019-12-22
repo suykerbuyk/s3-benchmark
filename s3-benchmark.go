@@ -36,11 +36,11 @@ import (
 )
 
 // Global variables
-var accessKey, secretKey, urlHost, bucket string
+var accessKey, secretKey, urlHost, bucket, region string
 var durationSecs, threads, loops int
 var objectSize uint64
 var objectData []byte
-var runningThreads, uploadCount, downloadCount, deleteCount int64
+var runningThreads, uploadCount, downloadCount, deleteCount, uploadSlowdownCount, downloadSlowdownCount, deleteSlowdownCount int64
 var endtime, uploadFinish, downloadFinish, deleteFinish time.Time
 var jsonPrint, newStruct bool
 
@@ -55,14 +55,15 @@ type parameters struct {
 }
 
 type logMessage struct {
-	LogTime    time.Time `json:"time"`
-	Method     string    `json:"method"`
-	Loop       int       `json:"loop"`
-	Time       float64   `json:"timeTaken"`
-	Objects    int64     `json:"totalObjects"`
-	Speed      string    `json:"avgSpeed"`
-	RawSpeed   uint64    `json:"rawSpeed"`
-	Operations float64   `json:"totalOperations"`
+	LogTime       time.Time `json:"time"`
+	Method        string    `json:"method"`
+	Loop          int       `json:"loop"`
+	Time          float64   `json:"timeTaken"`
+	Objects       int64     `json:"totalObjects"`
+	Speed         string    `json:"avgSpeed"`
+	RawSpeed      uint64    `json:"rawSpeed"`
+	Operations    float64   `json:"totalOperations"`
+	SlowDownCount int64     `json:"slowDownCount"`
 }
 
 func (l logMessage) String() string {
@@ -127,7 +128,7 @@ func getS3Client() *s3.S3 {
 	loglevel := aws.LogOff
 	// Build the rest of the configuration
 	awsConfig := &aws.Config{
-		Region:               aws.String("us-east-1"),
+		Region:               aws.String(region),
 		Endpoint:             aws.String(urlHost),
 		Credentials:          creds,
 		LogLevel:             &loglevel,
@@ -145,7 +146,7 @@ func getS3Client() *s3.S3 {
 	return client
 }
 
-func createBucket() {
+func createBucket(ignore_errors bool) {
 	// Get a client
 	client := getS3Client()
 	// Create our bucket (may already exist without error)
@@ -269,11 +270,16 @@ func runUpload(threadNum int) {
 		setSignature(req)
 		if resp, err := httpClient.Do(req); err != nil {
 			log.Fatalf("FATAL: Error uploading object %s: %v", prefix, err)
-		} else if resp.StatusCode != http.StatusOK {
-			fmt.Printf("Upload status %s: resp: %+v\n", resp.Status, resp)
-			if resp.Body != nil {
-				body, _ := ioutil.ReadAll(resp.Body)
-				fmt.Printf("Body: %s\n", string(body))
+		} else if resp != nil && resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == http.StatusServiceUnavailable {
+				atomic.AddInt64(&uploadSlowdownCount, 1)
+				atomic.AddInt64(&uploadCount, -1)
+			} else {
+				fmt.Printf("Upload status %s: resp: %+v\n", resp.Status, resp)
+				if resp.Body != nil {
+					body, _ := ioutil.ReadAll(resp.Body)
+					fmt.Printf("Body: %s\n", string(body))
+				}
 			}
 		}
 	}
@@ -291,9 +297,14 @@ func runDownload(threadNum int) {
 		req, _ := http.NewRequest(http.MethodGet, prefix, nil)
 		setSignature(req)
 		if resp, err := httpClient.Do(req); err != nil {
-			log.Fatalf("FATAL: Error uploading object %s: %v", prefix, err)
+			log.Fatalf("FATAL: Error downloading object %s: %v", prefix, err)
 		} else if resp != nil && resp.Body != nil {
-			io.Copy(ioutil.Discard, resp.Body)
+			if resp.StatusCode == http.StatusServiceUnavailable {
+				atomic.AddInt64(&downloadSlowdownCount, 1)
+				atomic.AddInt64(&downloadCount, -1)
+			} else {
+				io.Copy(ioutil.Discard, resp.Body)
+			}
 		}
 	}
 	// Remember last done time
@@ -311,8 +322,11 @@ func runDelete(threadNum int) {
 		prefix := fmt.Sprintf("%s/%s/Object-%d", urlHost, bucket, objnum)
 		req, _ := http.NewRequest(http.MethodDelete, prefix, nil)
 		setSignature(req)
-		if _, err := httpClient.Do(req); err != nil {
+		if resp, err := httpClient.Do(req); err != nil {
 			log.Fatalf("FATAL: Error deleting object %s: %v", prefix, err)
+		} else if resp != nil && resp.StatusCode == http.StatusServiceUnavailable {
+			atomic.AddInt64(&deleteSlowdownCount, 1)
+			atomic.AddInt64(&deleteCount, -1)
 		}
 	}
 	// Remember last done time
@@ -329,7 +343,8 @@ func main() {
 	myflag.StringVar(&secretKey, "s", "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG", "Secret key")
 	myflag.StringVar(&urlHost, "u", "https://play.min.io", "URL for host with method prefix")
 	myflag.StringVar(&bucket, "b", "s3-benchmark", "Bucket for testing")
-	myflag.IntVar(&durationSecs, "d", 10, "Duration of each test in seconds")
+	myflag.StringVar(&region, "r", "us-east-1", "Region for testing")
+	myflag.IntVar(&durationSecs, "d", 60, "Duration of each test in seconds")
 	myflag.IntVar(&threads, "t", 1, "Number of threads to run")
 	myflag.IntVar(&loops, "l", 1, "Number of times to repeat test")
 	myflag.BoolVar(&newStruct, "x", false, "Print output as one json document structure")
@@ -392,13 +407,19 @@ func main() {
 	rand.Read(objectData)
 
 	// Create the bucket and delete all the objects
-	createBucket()
+	createBucket(true)
 	deleteAllObjects()
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
+		// reset counters
 		uploadCount = 0
+		uploadSlowdownCount = 0
 		downloadCount = 0
+		downloadSlowdownCount = 0
+		deleteCount = 0
+		deleteSlowdownCount = 0
+
 		// Run the upload case
 		runningThreads = int64(threads)
 		starttime := time.Now()
@@ -414,21 +435,17 @@ func main() {
 		uploadTime := uploadFinish.Sub(starttime).Seconds()
 
 		bps := float64(uint64(uploadCount)*objectSize) / uploadTime
-		lmp := logMessage{
-			LogTime:    time.Now(),
-			Loop:       loop,
-			Method:     http.MethodPut,
-			Time:       uploadTime,
-			Objects:    uploadCount,
-			Speed:      bytefmt.ByteSize(uint64(bps)),
-			RawSpeed:   uint64(bps),
-			Operations: (float64(uploadCount) / uploadTime),
-		}
-		if params != nil {
-			params.Results = append(params.Results, lmp)
-		} else {
-			logit(lmp)
-		}
+		logit(logMessage{
+			LogTime:       time.Now(),
+			Loop:          loop,
+			Method:        http.MethodPut,
+			Time:          uploadTime,
+			Objects:       uploadCount,
+			Speed:         bytefmt.ByteSize(uint64(bps)),
+			RawSpeed:      uint64(bps),
+			Operations:    (float64(uploadCount) / uploadTime),
+			SlowDownCount: uploadSlowdownCount,
+		})
 
 		// Run the download case
 		runningThreads = int64(threads)
@@ -445,21 +462,17 @@ func main() {
 		downloadTime := downloadFinish.Sub(starttime).Seconds()
 
 		bps = float64(uint64(downloadCount)*objectSize) / downloadTime
-		lmg := logMessage{
-			LogTime:    time.Now(),
-			Loop:       loop,
-			Method:     http.MethodGet,
-			Time:       downloadTime,
-			Objects:    downloadCount,
-			Speed:      bytefmt.ByteSize(uint64(bps)),
-			RawSpeed:   uint64(bps),
-			Operations: (float64(downloadCount) / downloadTime),
-		}
-		if params != nil {
-			params.Results = append(params.Results, lmg)
-		} else {
-			logit(lmg)
-		}
+		logit(logMessage{
+			LogTime:       time.Now(),
+			Loop:          loop,
+			Method:        http.MethodGet,
+			Time:          downloadTime,
+			Objects:       downloadCount,
+			Speed:         bytefmt.ByteSize(uint64(bps)),
+			Operations:    (float64(downloadCount) / downloadTime),
+			RawSpeed:      uint64(bps),
+			SlowDownCount: downloadSlowdownCount,
+		})
 
 		// Run the delete case
 		runningThreads = int64(threads)
@@ -475,18 +488,14 @@ func main() {
 		}
 		deleteTime := deleteFinish.Sub(starttime).Seconds()
 
-		lmd := logMessage{
-			LogTime:    time.Now(),
-			Loop:       loop,
-			Method:     http.MethodDelete,
-			Time:       deleteTime,
-			Operations: (float64(uploadCount) / deleteTime),
-		}
-		if params != nil {
-			params.Results = append(params.Results, lmd)
-		} else {
-			logit(lmd)
-		}
+		logit(logMessage{
+			LogTime:       time.Now(),
+			Loop:          loop,
+			Method:        http.MethodDelete,
+			Time:          deleteTime,
+			Operations:    (float64(uploadCount) / deleteTime),
+			SlowDownCount: deleteSlowdownCount,
+		})
 	}
 
 	// All done
