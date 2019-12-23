@@ -160,7 +160,11 @@ func createBucket(ignore_errors bool) {
 				return
 			}
 		}
-		log.Fatalf("FATAL: Unable to create bucket %s (is your access and secret correct?): %v", bucket, err)
+		if ignore_errors == true {
+			log.Printf("FATAL: Unable to create bucket %s (is your access and secret correct?): %v", bucket, err)
+		} else {
+			log.Fatalf("FATAL: Unable to create bucket %s (is your access and secret correct?): %v", bucket, err)
+		}
 	}
 }
 
